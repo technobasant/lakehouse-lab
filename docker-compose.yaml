@@ -1,0 +1,273 @@
+# =============================================================================
+# A lakehouse spine that runs natively on Apple Silicon.
+#
+#   MinIO            S3-compatible object storage — where the table data lives
+#   Polaris          Apache Polaris 1.7.0, the Iceberg REST catalog — where the
+#                    table *metadata pointer* lives, and who is allowed to move it
+#   polaris-db       Postgres backing Polaris, so the catalog survives a restart
+#   trino-coordinator / trino-worker
+#                    Trino 483 split across two containers, because a
+#                    single-node Trino hides every question worth asking about
+#                    how work is distributed
+#
+# Why this shape and not the 2024 one: the older stack pinned Trino 437, an
+# archived `tabulario/iceberg-rest:0.2.0` catalog, and Hive Metastore underneath.
+# All three have been superseded. Polaris graduated incubation, and every image
+# here now publishes a native arm64 manifest — so nothing runs under emulation,
+# which was not true two years ago.
+# =============================================================================
+
+name: lakehouse
+
+services:
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-lakehouse}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-lakehouse-dev-only}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Creates the bucket Polaris will hand out scoped credentials for. Runs once
+  # and exits; `depends_on: service_completed_successfully` gates the rest.
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-lakehouse} ${MINIO_ROOT_PASSWORD:-lakehouse-dev-only} &&
+      mc mb --ignore-existing local/warehouse &&
+      mc admin user add local ${MINIO_STS_USER:-polaris-svc} ${MINIO_STS_PASSWORD:-polaris-svc-dev-only} || true &&
+      mc admin policy attach local readwrite --user ${MINIO_STS_USER:-polaris-svc} || true &&
+      mc ls local
+      "
+
+  polaris-db:
+    image: postgres:18.1-alpine
+    environment:
+      POSTGRES_USER: polaris
+      POSTGRES_PASSWORD: ${POLARIS_DB_PASSWORD:-polaris-dev-only}
+      POSTGRES_DB: polaris
+    volumes:
+      - polaris_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U polaris -d polaris"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Two findings the official Spark quickstart hides, because it runs Polaris on
+  # the default in-memory persistence:
+  #
+  #   1. `POLARIS_BOOTSTRAP_CREDENTIALS` supplies the root credentials. It does
+  #      NOT create the schema. Point Polaris at an empty Postgres and it starts
+  #      cleanly, reports healthy, and then fails every request with
+  #      `relation "polaris_schema.entities" does not exist`. The schema is the
+  #      admin tool's job, and it has to run first.
+  #
+  #   2. The purpose of persistence is surviving a restart, so bootstrap must be
+  #      idempotent. `-r POLARIS` on an already-bootstrapped realm is a no-op,
+  #      which is why this can sit in `depends_on` rather than a one-shot script
+  #      someone has to remember not to run twice.
+  polaris-bootstrap:
+    image: apache/polaris-admin-tool:1.7.0
+    depends_on:
+      polaris-db:
+        condition: service_healthy
+    environment:
+      polaris.persistence.type: relational-jdbc
+      quarkus.datasource.jdbc.url: jdbc:postgresql://polaris-db:5432/polaris
+      quarkus.datasource.username: polaris
+      quarkus.datasource.password: ${POLARIS_DB_PASSWORD:-polaris-dev-only}
+    # The admin tool does NOT read POLARIS_BOOTSTRAP_CREDENTIALS — that variable
+    # is the server's. Passing only `-r` exits 3 with "Specify either
+    # `--credentials` or `--print-credentials`", which is a good error but not
+    # one the quickstart prepares you for. The credential has to be repeated
+    # here in the tool's own `realm,clientId,clientSecret` form.
+    command:
+      - bootstrap
+      - -r
+      - POLARIS
+      - -c
+      - POLARIS,root,${POLARIS_ROOT_SECRET:-s3cr3t-dev-only}
+
+  polaris:
+    image: apache/polaris:1.7.0
+    depends_on:
+      polaris-db:
+        condition: service_healthy
+      polaris-bootstrap:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    ports:
+      - "8181:8181"   # Iceberg REST API
+      - "8182:8182"   # management: /healthcheck, /q/metrics
+    environment:
+      # realm,client-id,client-secret. Bootstrapped on first start only.
+      POLARIS_BOOTSTRAP_CREDENTIALS: POLARIS,root,${POLARIS_ROOT_SECRET:-s3cr3t-dev-only}
+      polaris.realm-context.realms: POLARIS
+
+      # Persist the catalog in Postgres. The default is in-memory, which loses
+      # every namespace on restart — fine for a demo, useless for a lab that is
+      # supposed to be reproducible.
+      polaris.persistence.type: relational-jdbc
+      quarkus.datasource.jdbc.url: jdbc:postgresql://polaris-db:5432/polaris
+      quarkus.datasource.username: polaris
+      quarkus.datasource.password: ${POLARIS_DB_PASSWORD:-polaris-dev-only}
+
+      # MinIO is S3-compatible but not S3. Polaris refuses non-AWS endpoints
+      # unless insecure storage types are explicitly allowed.
+      polaris.features."ALLOW_INSECURE_STORAGE_TYPES": "true"
+      # S3 only. Leaving FILE in raises a second severe-readiness error for a
+      # storage type this lab never uses.
+      polaris.features."SUPPORTED_CATALOG_STORAGE_TYPES": "[\"S3\"]"
+
+      # Polaris refuses `DROP TABLE ... ?purgeRequested=true` by default and
+      # answers 403. That is a defensible default — purge deletes the data files,
+      # not just the catalog entry — but it breaks `dbt run --full-refresh`,
+      # which builds an `<model>__dbt_backup` table and then drops it. The run
+      # fails with a Trino-side "Failed to drop table", and nothing in that
+      # message mentions purge, Polaris, or a permission.
+      polaris.features."DROP_WITH_PURGE_ENABLED": "true"
+      polaris.readiness.ignore-severe-issues: "true"
+      quarkus.otel.sdk.disabled: "true"
+
+      # A MinIO *user*, deliberately not the root account. MinIO refuses
+      # AssumeRole for root with "Unsupported action AssumeRole", which reads
+      # like STS is missing entirely — it is not, it is refusing that identity.
+      # Polaris signs its AssumeRole call with these, and MinIO hands back a
+      # short-lived session that Polaris then vends onward to Trino.
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: ${MINIO_STS_USER:-polaris-svc}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_STS_PASSWORD:-polaris-svc-dev-only}
+    healthcheck:
+      # /healthcheck is what the upstream Spark quickstart uses and it 404s on
+      # 1.7.0 — Quarkus serves health under /q/health. A healthcheck pointed at a
+      # 404 leaves the container "starting" forever and every dependant never runs.
+      test: ["CMD", "curl", "-f", "http://localhost:8182/q/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  trino-coordinator:
+    image: trinodb/trino:483
+    depends_on:
+      polaris:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./trino/coordinator/etc:/etc/trino:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/info"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  trino-worker:
+    image: trinodb/trino:483
+    depends_on:
+      trino-coordinator:
+        condition: service_healthy
+    volumes:
+      - ./trino/worker/etc:/etc/trino:ro
+
+  # dbt runs as a one-shot container against the coordinator. It holds no S3
+  # credentials — it talks to Trino, Trino asks Polaris, Polaris vends per table.
+  dbt:
+    build: ./dbt
+    profiles: ["tools"]          # only starts with `--profile tools`
+    depends_on:
+      trino-coordinator:
+        condition: service_healthy
+    volumes:
+      - ./dbt:/dbt
+    environment:
+      DBT_PROFILES_DIR: /dbt
+    working_dir: /dbt
+
+  airflow-db:
+    image: postgres:18.1-alpine
+    profiles: ["orchestration"]
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:-airflow-dev-only}
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # `airflow standalone` runs api-server, scheduler, dag-processor and triggerer
+  # in one process. In production those are four deployments; in a lab they are
+  # four things to wait for, and the split teaches nothing this article is about.
+  airflow:
+    build: ./airflow
+    profiles: ["orchestration"]
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+      trino-coordinator:
+        condition: service_healthy
+    ports:
+      - "8081:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:-airflow-dev-only}@airflow-db:5432/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      # Lab only: everyone who reaches the UI is an admin, so there is no
+      # generated password to fish out of the logs on every rebuild.
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "true"
+      AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow:8080/execution/
+      # The DAG's `trino_lakehouse` connection, defined here so a fresh clone
+      # needs no UI step. Plain HTTP on the private compose network, as dbt uses.
+      AIRFLOW_CONN_TRINO_LAKEHOUSE: trino://dbt@trino-coordinator:8080/
+      DBT_PROFILES_DIR: /opt/airflow/dbt
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./dbt:/opt/airflow/dbt
+    command: standalone
+
+  # A second engine on the *same* catalog. This is the argument for a REST
+  # catalog stated as a test rather than a slide: if Polaris is really the
+  # system of record, another engine should see the tables Trino wrote without
+  # anyone copying, exporting, or re-registering anything.
+  #
+  # allin1 bundles FE and BE in one container. Production splits them; a lab
+  # that splits them spends 2 GB teaching nothing this post is about.
+  starrocks:
+    image: starrocks/allin1-ubuntu:4.1.4
+    profiles: ["engines"]
+    depends_on:
+      polaris:
+        condition: service_healthy
+    ports:
+      - "9030:9030"   # MySQL protocol
+      - "8030:8030"   # FE HTTP
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h127.0.0.1 -P9030 -uroot -e 'SELECT 1' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 90s
+
+volumes:
+  minio_data:
+  polaris_db_data:
+  airflow_db_data:

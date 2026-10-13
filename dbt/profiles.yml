@@ -1,0 +1,14 @@
+# No credentials here beyond Trino's own. The S3 keys live nowhere in this
+# project — dbt talks to Trino, Trino asks Polaris, Polaris vends per-table.
+lakehouse:
+  target: dev
+  outputs:
+    dev:
+      type: trino
+      host: trino-coordinator
+      port: 8080
+      user: dbt
+      catalog: lakehouse
+      schema: silver
+      http_scheme: http
+      threads: 4

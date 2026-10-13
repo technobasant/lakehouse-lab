@@ -1,0 +1,12 @@
+version: 2
+
+sources:
+  - name: bronze
+    catalog: lakehouse
+    schema: bronze
+    description: >
+      Raw landings. Written once by the ingest step, never edited in place —
+      everything downstream reads from here and nothing writes back.
+    tables:
+      - name: orders
+      - name: customers

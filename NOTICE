@@ -1,0 +1,7 @@
+lakehouse-lab
+Copyright 2026 Basant Bhattarai
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+It configures and runs third-party software (Trino, Apache Polaris, Apache
+Iceberg, MinIO, PostgreSQL, dbt, Apache Airflow, StarRocks), which is not
+redistributed here and remains under its own licences.

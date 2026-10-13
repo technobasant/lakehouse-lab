@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+# Static checks only. The stack itself needs ~12 GB of RAM and several minutes
+# of image pulls; that belongs on a laptop, not on every push.
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compose file is valid
+        run: docker compose config -q
+
+      - name: Shell scripts pass shellcheck
+        run: shellcheck scripts/*.sh
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Airflow DAG compiles
+        run: python -m py_compile airflow/dags/lakehouse_pipeline.py
+
+      # `dbt parse` needs the adapter installed but no live warehouse, so it
+      # catches Jinja and config errors without starting Trino.
+      - name: dbt project parses
+        working-directory: dbt
+        env:
+          DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
+        run: |
+          pip install "dbt-trino==1.10.3"
+          dbt parse --profiles-dir . --project-dir . \
+            --target-path /tmp/dbt-target --log-path /tmp/dbt-logs

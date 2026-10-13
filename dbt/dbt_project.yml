@@ -1,0 +1,25 @@
+name: lakehouse
+version: "1.0.0"
+profile: lakehouse
+
+flags:
+  # Opt in now rather than being surprised by the default flip later. The lab
+  # talks plain HTTP to Trino on a private compose network, so this changes
+  # nothing here except removing a warning from every run.
+  require_certificate_validation: false
+
+model-paths: ["models"]
+target-path: "target"
+
+models:
+  lakehouse:
+    # `table_type: iceberg` is not optional on dbt-trino. Leave it out and dbt
+    # asks Trino for a Hive-style table, which this catalog cannot create — the
+    # error names neither dbt nor Iceberg.
+    +table_type: iceberg
+    silver:
+      +schema: silver
+      +materialized: incremental
+    gold:
+      +schema: gold
+      +materialized: table

@@ -1,0 +1,15 @@
+# dbt build output and local state
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+dbt/.user.yml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Local overrides of the dev-only defaults
+.env
+
+.DS_Store
