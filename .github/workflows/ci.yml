@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 # Static checks only. The stack itself needs ~12 GB of RAM and several minutes
-# of image pulls; that belongs on a laptop, not on every push.
+# of image pulls; that belongs on a local run, not on every push.
 jobs:
   check:
     runs-on: ubuntu-latest

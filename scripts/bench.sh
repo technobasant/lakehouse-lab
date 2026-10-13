@@ -7,7 +7,7 @@
 # never touches the network. It is here as a floor: whatever Iceberg costs above
 # this number is the cost of object storage, Parquet decoding, and manifest
 # planning. That framing matters more than the raw figures, which come off a
-# laptop and should not be quoted at anyone.
+# single host and should not be quoted at anyone.
 #
 # Each query runs $WARMUP times to let the JIT settle, then $RUNS times timed.
 # The reported figure is the median, not the mean: one GC pause in a five-run

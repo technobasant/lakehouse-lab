@@ -1,8 +1,9 @@
 # Measured results
 
-Every figure below came off this lab on 2026-08-16, on an Apple M-series laptop
-with Docker Desktop allocated 8 CPUs and 11.67 GB. They are honest ceilings for
-a laptop, not benchmarks to quote at anyone.
+Every figure below came off this lab on 2026-08-16, on an Apple M-series host
+with Docker Desktop allocated 8 CPUs and 11.67 GB. Every service shares that one
+host, so they are honest ceilings for this configuration, not benchmarks to quote
+at anyone.
 
 Query timings are **server-side**, read from `system.runtime.queries`
 (`date_diff('millisecond', created, "end")`), median of 5–7 runs after 2 warm-ups.

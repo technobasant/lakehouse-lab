@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/technobasant/lakehouse-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/technobasant/lakehouse-lab/actions/workflows/ci.yml)
 
-A lakehouse on one laptop: MinIO, Apache Polaris as the Iceberg REST catalog, Trino, dbt, Airflow and StarRocks — every image native arm64, nothing emulated. It is a 2024 architecture rebuilt on 2026 versions, and the part the 2024 build did not have turned out to be the interesting one: **credentials that expire**.
+A working lakehouse: MinIO, Apache Polaris as the Iceberg REST catalog, Trino, dbt, Airflow and StarRocks — every image native arm64, nothing emulated. It is a 2024 architecture rebuilt on 2026 versions, and the part the 2024 build did not have turned out to be the interesting one: **credentials that expire**.
 
 Every figure below came off this stack and is in [MEASUREMENTS.md](MEASUREMENTS.md) with the method that produced it. The four write-ups walk through it step by step, including the failures.
 
@@ -104,7 +104,7 @@ docker compose --profile orchestration --profile tools --profile engines down -v
 
 ## Results
 
-Measured on 2026-08-16, Apple M-series laptop, Docker Desktop with 8 CPUs and 11.67 GB. Query timings are server-side medians of 5–7 runs after 2 warm-ups. Full detail in [MEASUREMENTS.md](MEASUREMENTS.md).
+Measured on 2026-08-16, Apple M-series host, Docker Desktop with 8 CPUs and 11.67 GB. Query timings are server-side medians of 5–7 runs after 2 warm-ups. Full detail in [MEASUREMENTS.md](MEASUREMENTS.md).
 
 | What | Result | Method |
 | --- | --- | --- |
@@ -147,7 +147,7 @@ Each of these is commented where it is fixed, and most of them fail in a way tha
 
 ## Limits
 
-- **One laptop.** The timings are honest ceilings for 8 CPUs and 11.67 GB, not production numbers, and TPC-H SF1 is small enough that they reflect planning and pruning more than throughput.
+- **One host.** Every service runs on one machine, so the timings are honest ceilings for 8 CPUs and 11.67 GB, not production numbers, and TPC-H SF1 is small enough that they reflect planning and pruning more than throughput.
 - **Tested on arm64 only.** Every image publishes a native arm64 manifest; amd64 has not been run here.
 - **Lab topology.** One Trino worker, StarRocks allin1, Airflow `standalone` — production splits all three.
 - **Two pieces were reconstructed when this repo was packaged, and have not been re-run end to end.** The original lab created `bronze.customers` interactively and never saved the statement, so the one in `sql/01-bronze.sql` is a reconstruction; the `trino_lakehouse` Airflow connection is now defined in `docker-compose.yaml` instead of by hand. The figures in [MEASUREMENTS.md](MEASUREMENTS.md) come from the original runs. If a fresh clone disagrees with them, open an issue — that is a bug in the packaging, not a result.
