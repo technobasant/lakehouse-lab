@@ -67,20 +67,23 @@ echo "polaris: authenticated as $CLIENT_ID"
 # `stsUnavailable: false` lets Polaris call STS AssumeRole so it can vend
 # short-lived, prefix-scoped credentials instead of handing out standing keys.
 #
-# `roleArn` is required by the STS API shape even though MinIO ignores it — the
-# response comes back with an empty AssumedRoleUser.Arn.
+# `roleArn` is optional in Polaris 1.7.0, and MinIO ignores it (the response
+# comes back with an empty AssumedRoleUser.Arn). This script sets a placeholder,
+# and the account id in that placeholder is what triggers the next problem.
 #
-# `kmsUnavailable: true` is the one that is not in any quickstart. Polaris
-# builds a session policy for the AssumeRole call and, by default, adds a KMS
-# statement to it. MinIO's policy engine does not understand KMS ARNs and
-# rejects the whole request:
+# `kmsUnavailable: true` is the one that is not in any quickstart. When Polaris
+# knows a region and an account id (here, from roleArn), it adds a wildcard KMS
+# statement to the session policy of READ-ONLY credentials. MinIO's policy
+# engine does not understand KMS ARNs and rejects the whole request:
 #
 #   invalid resource 'arn:aws:kms:us-east-1:123456789012:key/*'
 #   (Service: Sts, Status Code: 400)
 #
 # The failure mode is what makes this worth writing down. CREATE TABLE AS
-# SELECT *succeeded* — 1.5M rows, 84 objects in the bucket — and then every
-# SELECT failed with "Failed to load table". Data written, data unreadable, and
+# SELECT asked for write credentials, which never carry that statement, so it
+# *succeeded* — 1.5M rows, 84 objects in the bucket — and then every SELECT,
+# which gets read-only credentials, failed with "Failed to load table".
+# Leaving roleArn out would avoid it too; kmsUnavailable states the intent. Data written, data unreadable, and
 # the S3 error is four layers below the message Trino prints.
 step "catalog $CATALOG" POST /api/management/v1/catalogs "$(cat <<JSON
 {"catalog":{"name":"$CATALOG","type":"INTERNAL",

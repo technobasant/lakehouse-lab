@@ -160,7 +160,7 @@ Each of these is commented where it is fixed, and most of them fail in a way tha
 3. [Iceberg maintenance: 20 files into 1, and a rollback I actually performed](https://basantbhattarai.com.np/writing/iceberg-compaction-snapshots-rollback/)
 4. [Two engines, one Iceberg catalog: StarRocks beside Trino, neither holding a key](https://basantbhattarai.com.np/writing/starrocks-trino-one-iceberg-catalog/)
 
-The retrieval layer that runs on this storage lives in [rag-pipeline](https://github.com/technobasant/rag-pipeline) and is written up in [the RAG lakehouse post](https://basantbhattarai.com.np/writing/rag-lakehouse-delta-spark-chroma/). Both halves together: [the lakehouse and RAG case study](https://basantbhattarai.com.np/work/lakehouse-rag-lab/).
+The retrieval layer's first version (July 2025: Spark 3.5, Parquet and DuckDB, Chroma) is public in [rag-pipeline](https://github.com/technobasant/rag-pipeline). The 2026 rebuild on Delta that [the RAG lakehouse post](https://basantbhattarai.com.np/writing/rag-lakehouse-delta-spark-chroma/) describes is not published yet. Both halves together: [the lakehouse and RAG case study](https://basantbhattarai.com.np/work/lakehouse-rag-lab/).
 
 ## Licence
 

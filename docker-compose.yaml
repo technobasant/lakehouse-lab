@@ -113,9 +113,11 @@ services:
         condition: service_completed_successfully
     ports:
       - "8181:8181"   # Iceberg REST API
-      - "8182:8182"   # management: /healthcheck, /q/metrics
+      - "8182:8182"   # management: /q/health, /q/metrics
     environment:
-      # realm,client-id,client-secret. Bootstrapped on first start only.
+      # realm,client-id,client-secret. Has no effect with relational-jdbc:
+      # Polaris only auto-bootstraps the in-memory store, so polaris-bootstrap
+      # (above) creates the realm and root credentials instead.
       POLARIS_BOOTSTRAP_CREDENTIALS: POLARIS,root,${POLARIS_ROOT_SECRET:-s3cr3t-dev-only}
       polaris.realm-context.realms: POLARIS
 
