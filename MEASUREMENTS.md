@@ -91,9 +91,11 @@ failure and is not.
 | `FOR VERSION AS OF <snapshot>` | 1,645,000 |
 | after `EXECUTE rollback_to_snapshot(<snapshot>)` | 1,645,000 |
 
-**909,968 rows recovered in 589 ms.** No data moved: a rollback rewrites the
-current-snapshot pointer, which is why it is three orders of magnitude faster
-than the equivalent pgBackRest PITR in the Patroni lab.
+**909,968 rows recovered in 589 ms** of wall clock around the CLI, most of it
+client startup. No data moved: a rollback rewrites the current-snapshot pointer,
+so it is faster than the pgBackRest point-in-time restore in the Patroni lab
+(4.2 s for the restore command alone, before WAL replay), and unlike that
+restore its cost does not grow with the data.
 
 ## Expiry destroys the safety net
 

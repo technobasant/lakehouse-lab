@@ -11,7 +11,7 @@
 #                    how work is distributed
 #
 # Why this shape and not the 2024 one: the older stack pinned Trino 437, an
-# archived `tabulario/iceberg-rest:0.2.0` catalog, and Hive Metastore underneath.
+# `tabulario/iceberg-rest:0.2.0` catalog (not updated since August 2024), and Hive Metastore underneath.
 # All three have been superseded. Polaris graduated incubation, and every image
 # here now publishes a native arm64 manifest — so nothing runs under emulation,
 # which was not true two years ago.
@@ -70,8 +70,9 @@ services:
   # Two findings the official Spark quickstart hides, because it runs Polaris on
   # the default in-memory persistence:
   #
-  #   1. `POLARIS_BOOTSTRAP_CREDENTIALS` supplies the root credentials. It does
-  #      NOT create the schema. Point Polaris at an empty Postgres and it starts
+  #   1. With relational-jdbc Polaris never bootstraps itself, so
+  #      `POLARIS_BOOTSTRAP_CREDENTIALS` has no effect and nothing creates the
+  #      schema on its own. Point Polaris at an empty Postgres and it starts
   #      cleanly, reports healthy, and then fails every request with
   #      `relation "polaris_schema.entities" does not exist`. The schema is the
   #      admin tool's job, and it has to run first.
@@ -146,9 +147,11 @@ services:
       polaris.readiness.ignore-severe-issues: "true"
       quarkus.otel.sdk.disabled: "true"
 
-      # A MinIO *user*, deliberately not the root account. MinIO refuses
-      # AssumeRole for root with "Unsupported action AssumeRole", which reads
-      # like STS is missing entirely — it is not, it is refusing that identity.
+      # A dedicated MinIO *user*. The first attempt failed with "Unsupported
+      # action AssumeRole": MinIO returns that from its web-identity handler,
+      # which receives STS requests that carry no SigV4 signature, so the call
+      # never reached AssumeRole. Explicit keys for this user fixed it, and a
+      # least-privilege identity is the right one anyway.
       # Polaris signs its AssumeRole call with these, and MinIO hands back a
       # short-lived session that Polaris then vends onward to Trino.
       AWS_REGION: us-east-1
@@ -157,7 +160,8 @@ services:
     healthcheck:
       # /healthcheck is what the upstream Spark quickstart uses and it 404s on
       # 1.7.0 — Quarkus serves health under /q/health. A healthcheck pointed at a
-      # 404 leaves the container "starting" forever and every dependant never runs.
+      # 404 never passes: after 30 failed probes the container turns unhealthy,
+      # and every dependant waiting on service_healthy never starts.
       test: ["CMD", "curl", "-f", "http://localhost:8182/q/health/ready"]
       interval: 10s
       timeout: 5s
